@@ -4,11 +4,15 @@
 (require "http-world.ss")
 
 
+
 (define (update w req)
   (add1 w))
 
 (define (make-response w req)
   (string-append "Hello world, I see "
-                 (number->string w)))
+                 (number->string w)
+                 (if (request-has? req "hi")
+                     (request-lookup req "hi")
+                     "I don't know")))
 
 (big-bang 0 (on-http update make-response))
