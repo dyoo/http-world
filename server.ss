@@ -1,22 +1,22 @@
 ;; The first three lines of this file were inserted by DrScheme. They record metadata
 ;; about the language level of this file in a form that our tools can easily process.
 #reader(lib "htdp-intermediate-lambda-reader.ss" "lang")((modname server) (read-case-sensitive #t) (teachpacks ()) (htdp-settings #(#t constructor repeating-decimal #f #t none #f ())))
-;; in moby-scheme/src/test there exists kathi-finder, parse-google-maps-places, and grocery-shopper which all deal with similar principles to this
+;; ALL TIMES ARE IN SECONDS, ALL LENGTHS ARE IN METERS, ALL VELOCITIES ARE IN M/S, ALL BEARINGS ARE IN RADIANS
 (require "http-world.ss")
 
 
 ;;;; CONSTANTS
 
 ;; Time between ticks (seconds)
-(define TICK_TIME 1)
+(define TICK_TIME 10)
 ;; Time between updates (in TICKS)
-(define UPDATE_TICK 60)
+(define UPDATE_TICK (/ 20 TICK_TIME))
 ;; Time between updates (in Seconds)
 (define UPDATE_TIME (* TICK_TIME UPDATE_TICK))
 ;; Maximum timeout time for a person's data (the number of seconds after which someone's data will be left out)
 (define PERSON_TIMEOUT 300)
 ;; Maximum timeout time for a place's data
-(define PLACE_TIMEOUT 600)
+(define PLACE_TIMEOUT 40)
 
 
 ;;;; STRUCTURES
@@ -31,12 +31,14 @@
 ;; a place can be either a named-place or an unnamed-place:
 ;;;; a named-place has a name (String), lattitude (degrees), longitude (degrees), radius (meters)
 (define-struct named-place (name latitude longitude radius infos))
-;;;; an unnamed-place has a lattitude (degrees) and a longitude (degrees) -- if asked for a name it will give: "Unknown (<lattitude>, <longitude>)", if asked for a radius it will default to 0.5 miles (but will give the equivalent in meters)
+;;;; an unnamed-place has a lattitude (degrees) and a longitude (degrees)
+;;;;if asked for a name it will give: "Unknown (<lattitude>, <longitude>)", if asked for a radius it will default to 0.5 miles (but will give the equivalent in meters)
 (define-struct unnamed-place (latitude longitude infos))
+(define UNNAMED_PLACE_RADIUS 20) ;; The number of meters in the radius of an unnamed place
 ;; the statusInfo of a place has numberOfPeople, avgSpeed, and prevousTrafficLevel
-(define-struct statusInfo (dir-speeds trafficLevel))
+(define-struct statusInfo (dir-speeds trafficLevel time))
 ;; a dir-speed consists of a center-bearing,
-(define-struct dir-speed (center-bearing numPeople avgSpeed time))
+(define-struct dir-speed (center-bearing numPeople avgSpeed))
 ;; BEARING_MARGIN is the max number of radians that a velocity can be from the center-bearing of a dir-speed to be a part of that direction
 (define BEARING_MARGIN (/ pi 8))
 
@@ -46,7 +48,13 @@
 ;; a world consists of a list of places, a hash of people, and a number representing the absolute time in seconds
 (define-struct world (places people absolute-time))
 
-(define initPlaces (list ))
+;; Test Places
+(define testPlace1 (make-named-place "Boston" 42.37 -71.05 2 (list (make-statusInfo (list (make-dir-speed 0.2 4 2.7) (make-dir-speed 1.57 1 3.5)) 0 1) (make-statusInfo (list (make-dir-speed 0.2 5 3.0)) 0 0))))
+(define testPlace2 (make-unnamed-place 42.38 -71 (list)))
+(define testPlace3 (make-unnamed-place 42 -71 (list (make-statusInfo (list (make-dir-speed 3.5 1 5)) 0 1))))
+
+
+(define initPlaces (list testPlace1 testPlace2 testPlace3))
 (define initPeople (list ))
 
 (define initWorld (make-world initPlaces initPeople 0))
@@ -55,103 +63,177 @@
 
 
 
-;;;; ALL UPDATES
+;;;; ON TICK
+;;;; Removes all expired data
+(define (tock w)
+;  (if (< (mod (world-absolute-time w) UPDATE_TIME) TICK_TIME)
+ ;     (make-world (cleanPlaces (world-places w) (- (world-absolute-time w) PLACE_TIMEOUT)) (cleanPeople (world-people w) (- (world-absolute-time w) PERSON_TIMEOUT)) (+ TICK_TIME (world-absolute-time w)))
+      (make-world (world-places w) (world-people w) (+ (world-absolute-time w) TICK_TIME)));)
 
-#;(define (update-all w)
-  (if (< (mod (world-absolute-time w) UPDATE_TIME) TICK_TIME)
-      (let ((newPeople (update-people w)))
-        (make-world (update-places (world-places w) newPeople (world-absolute-time w)) newPeople (+ TICK_TIME (world-absolute-time w))))
-      (make-world (world-places w) (world-people w) (+ (world-absolute-time w) TICK_TIME)))) ;; update-people and update-places still need to be made
-
-
-;;;; Update Person-related-functions
-
-;; Let us assume (at least for right now that req is a structure containing name, latitude, and longitude
-(define (update-person w req)
-  (if (and (request-has? req "name") (request-has? req "lat") (request-has? req "lon"))
-      (let ((lat (string->number (request-lookup req "lat"))) (lon (string->number (request-lookup req "lon"))) (aName (request-lookup req "name")))
-        (make-world (world-places w)
-                    (if (and (contains-person? (world-people w) aName)
-                             (not (empty? (person-data (get-person (world-people w) aName)))))
-                        (cons (make-person aName
-                                           (cons (make-place-time lat
-                                                                  lon
-                                                                  (get-velocity lat
-                                                                                lon
-                                                                                (place-time-latitude (first (person-data (get-person (world-people w) aName))))
-                                                                                (place-time-longitude (first (person-data (get-person (world-people w) aName))))
-                                                                                (- (world-absolute-time w) (place-time-time (first (person-data (get-person (world-people w) aName))))))
-                                                                  (world-absolute-time w))
-                                                 (person-data (get-person (world-people w)
-                                                                          aName))))
-                              (remove-person (world-people w) aName))
-                        (cons (make-person aName
-                                           (list (make-place-time lat
-                                                                  lon
-                                                                  (make-velocity -1 -1) ;; should this be null or some other value?
-                                                                  (world-absolute-time w))))
-                              (world-people w)))
-                    (add1 (world-absolute-time w)))) ;; THIS SHOULD BE CHANGED BACK TO NOT ADDING ONE IN NON-TESTING IMPLEMENTATIONS
-      w))
-
-;; Cleans up old data
-(define (update-people w)
-  (filter (lambda (x) (not (empty? (person-data x)))) ;; right now this removes a person if they have no data -- this can be changed if necessary
-          (map (lambda (aPerson)
-                 (removeOldPeopleData (person-data aPerson)
-                                      (- (world-absolute-time w) PERSON_TIMEOUT)))
-               (world-people w))))
-
-;; Eliminates old entries for people given a list of data (ones with time < minTime)
-(define (removeOldPeopleData alod minTime)
-  (cond
-    [(empty? alod) empty]
-    [(< (place-time-time (first alod)) minTime) empty]
-    [else (cons (first alod) (removeOldPeopleData (rest alod) minTime))]))
-
-
-;;;; UPDATE PLACES
-#;(
-;; Updates place data
-(define (update-places oldPlaces newPeople curTime)
-  (foldl (lambda (y z) (cleanPlaces y z (- curTime PLACE_TIMEOUT)))
-         empty
-         (map (lambda (x) (addPeopleToPlace newPeople x))
-              oldPlaces)))
+;;;; Removing old place data
 
 ;; cleanPlaces: (listof place) -> (listof place)
 ;; removes all old information from places and removes unnamed places from the list if they no longer contain any data
-(define (cleanPlaces aPlace already minTime)
-  (let ((newPlace (removeOldPlaceData (statusInfo-dir-speeds (place-infos aPlace)) minTime)))
-    (cond
-      [(empty? (place-infos aPlace)) already]
-      [else (cons newPlace already)])))
-              
-
-;; Eliminates old entries for places given a list of data (ones with time < minTime)
-(define (removeOldPlaceData alod minTime)
+(define (cleanPlaces allPlaces minTime)
   (cond
-    [(empty? alod) empty]
-    [(< (dir-speed-time (first alod)) minTime) empty]
-    [else (cons (first alod) (removeOldPlaceData (rest alod) minTime))]))
+    [(empty? allPlaces) empty]
+    [(named-place? (first allPlaces)) (cons (make-named-place (named-place-name (first allPlaces))
+                                                              (named-place-latitude (first allPlaces))
+                                                              (named-place-longitude (first allPlaces))
+                                                              (named-place-radius (first allPlaces))
+                                                              (cleanInfoList (named-place-infos (first allPlaces)) minTime))
+                                            (cleanPlaces (rest allPlaces) minTime))]
+    [(unnamed-place? (first allPlaces)) (let ((newInfoList (cleanInfoList (place-infos (first allPlaces)) minTime)))
+                                          (cond
+                                            [(empty? newInfoList) (cleanPlaces (rest allPlaces) minTime)]
+                                            [else (cons (make-unnamed-place (unnamed-place-latitude (first allPlaces))
+                                                                            (unnamed-place-longitude (first allPlaces))
+                                                                            newInfoList)
+                                                        (cleanPlaces (rest allPlaces) minTime))]
+                                            ))]
+    ))
 
-;; Adds to the given place the relevant set of people from the given list of people (returns the list)
-(define (addPeopleToPlace newPeople aPlace)
-  (let ((newInfos (cons (foldl addPersonToPlace
-                               empty
-                               newPeople)
-                        (place-infos aPlace))))
-    (cond
-      [(named-place? aPlace)]
-      [else ])))
-
-;; Adds to the given place the relevant data from the given person (returns the place)
-(define (addPersonToPlace aPerson aPlace)
+;; removes any status infos with times below minTime
+(define (cleanInfoList infoList minTime)
   (cond
-    [()]
-    []))
-)
-;;;; RESPONSE FUNCTIONS
+    [(empty? infoList) empty]
+    [(< (statusInfo-time (first infoList)) minTime) empty]
+    [else (cons (first infoList) (cleanInfoList (rest infoList) minTime))]))
+
+;;;; Removing old person data
+;; Removes all old information from people and ????? removes people from the list if they no longer contain any data ?????
+(define (cleanPeople allPeople minTime)
+  (cond
+    [(empty? allPeople) empty]
+    [else (let ((newDataList (cleanDataList (person-data (first allPeople)) minTime)))
+            (cond
+              [(empty? newDataList) (cleanPeople (rest allPeople) minTime)] ;; depending on whether or not you want to remove this person, change this line
+              [else (cons (make-person (person-name (first allPeople)) newDataList) (cleanPeople (rest allPeople) minTime))]
+              ))]
+    ))
+
+;; Removes any place-times with times below minTime
+(define (cleanDataList dataList minTime)
+  (cond
+    [(empty? dataList) empty]
+    [(< (place-time-time (first dataList)) minTime) empty]
+    [else (cons (first dataList) (cleanDataList (rest dataList) minTime))]
+    ))
+
+
+;;;; ON REQUEST
+;;;; When a person has pinged, add the new data to the list of people and of places
+
+;; Let us assume (at least for right now that req is a structure containing name, latitude, and longitude
+(define (add-person w req)
+  (if (and (request-has? req "name")
+           (request-has? req "lat")
+           (request-has? req "lon")
+           (alphabet-and-number? (request-lookup req "name"))
+           (number? (string->number (request-lookup req "lat")))
+           (number? (string->number (request-lookup req "lon")))) ;; These are the requirements for the parameters which will be sent as requests (they must be usable, present, and convertible
+      (let ((aName (request-lookup req "name")) (aLat (string->number (request-lookup req "lat"))) (aLng (string->number (request-lookup req "lon"))))
+        (let ((newPersonList (addNewData (world-people w) aName aLat aLng (world-absolute-time w))))
+          (if (and (boolean? newPersonList) (false? newPersonList))
+              w
+              (make-world (addPersonToPlaces (get-person newPersonList aName)
+                                             (world-absolute-time w)
+                                             (if (contains-location? (world-places w) aLat aLng)
+                                                 (world-places w)
+                                                 (cons (make-unnamed-place aLat aLng empty)
+                                                       (world-places w))))
+                          newPersonList
+                          (world-absolute-time w)))))
+      w))
+
+;; Adds the data at the given time from the given person to the given list of places (the list of places must have at least one place in it which contains the coordinates of the person's most recent location)
+(define (addPersonToPlaces aPerson curTime alop)
+  (cond
+    [(empty? alop) empty]
+    [(contains? (first alop) (place-time-latitude (first (person-data aPerson))) (place-time-longitude (first (person-data aPerson))))
+     (cons (cond 
+             [(named-place? (first alop)) (make-named-place (named-place-name (first alop))
+                                                            (place-latitude (first alop))
+                                                            (place-longitude (first alop))
+                                                            (named-place-radius (first alop))
+                                                            (addPersonToInfos aPerson curTime (named-place-infos (first alop))))]
+             [(unnamed-place? (first alop)) (make-unnamed-place (place-latitude (first alop))
+                                                                (place-longitude (first alop))
+                                                                (addPersonToInfos aPerson curTime (place-infos (first alop))))])
+           (addPersonToPlaces aPerson curTime (rest alop)))]
+    [else (cons (first alop) (addPersonToPlaces aPerson curTime (rest alop)))]))
+
+
+;; adds the first place-time data from the given person to the given list of places and returns the list of places
+(define (addPersonToInfos aPerson curTime aloSI)
+  (cond
+    [(empty? aloSI) empty]
+    [(= (place-time-time (first (person-data aPerson)))
+        (statusInfo-time (first aloSI)))
+     (cons (make-statusInfo (addDataToDS (place-time-vel (first (person-data aPerson))) (statusInfo-dir-speeds (first aloSI)) false)
+                            (statusInfo-trafficLevel (first aloSI))
+                            (statusInfo-time (first aloSI)))
+           (rest aloSI))] ;; if the person's first place-time has the same time as the first statusinfo, add it there (keeping in mind direction etc)
+    [else (cons (make-statusInfo (list (make-dir-speed (velocity-dir (place-time-vel (first (person-data aPerson))))
+                                                       1
+                                                       (velocity-speed (place-time-vel (first (person-data aPerson))))))
+                                 0
+                                 curTime)
+                aloSI)]))    ;; else, cons (new first) aloSI
+
+;; Adds the velocity data from aVel to the list of dir-speed (aloDS), adding a new dir-speed if necessary
+(define (addDataToDS aVel aloDS entered)
+  (cond
+    [(and (= 0 (velocity-speed aVel)) (= -1 (velocity-dir aVel))) (if (empty? aloDS)
+                                                                      (list (make-dir-speed -1 1 0))
+                                                                      (map (lambda (x) (make-dir-speed (dir-speed-center-bearing x)
+                                                                                                       (add1 (dir-speed-numPeople x))
+                                                                                                       (/ (+ (* (dir-speed-numPeople x)
+                                                                                                                (dir-speed-avgSpeed x))
+                                                                                                             (velocity-speed aVel))
+                                                                                                          (add1 (dir-speed-numPeople x)))))
+                                                                           aloDS))]
+    [(and (empty? aloDS) (not entered)) (list (make-dir-speed (velocity-dir aVel) 1 (velocity-speed aVel)))]
+    [(and (empty? aloDS) entered) empty]
+    [(or (and (< (dir-speed-center-bearing (first aloDS)) BEARING_MARGIN)
+              (>= (velocity-dir aVel) (- (+ (* 2 pi) (dir-speed-center-bearing (first aloDS))) BEARING_MARGIN)))
+         (and (> (dir-speed-center-bearing (first aloDS)) (- (* 2 pi) BEARING_MARGIN))
+              (<= (velocity-dir aVel) (- (+ BEARING_MARGIN (dir-speed-center-bearing (first aloDS))) (* 2 pi))))
+         (and (<= (velocity-dir aVel) (dir-speed-center-bearing (first aloDS)))
+              (>= (velocity-dir aVel) (dir-speed-center-bearing (first aloDS)))))
+     (cons (make-dir-speed (dir-speed-center-bearing (first aloDS))
+                           (add1 (dir-speed-numPeople (first aloDS)))
+                           (/ (+ (* (dir-speed-numPeople (first aloDS))
+                                    (dir-speed-avgSpeed (first aloDS)))
+                                 (velocity-speed aVel))
+                              (add1 (dir-speed-numPeople (first aloDS)))))
+           (addDataToDS aVel (rest aloDS) true))]
+    [else (cons (first aloDS) (addDataToDS aVel (rest aloDS) entered))]))
+
+;; Adds the data to the list of people, and returns the list of people (returns false if the person named already has data at the current time)
+(define (addNewData alop aName aLat aLng curTime)
+  (cond
+    [(contains-person? alop aName)
+     (if (<= curTime (place-time-time (first (person-data (get-person alop aName)))))
+         false
+         (cons (make-person aName
+                            (cons (make-place-time aLat
+                                                   aLng
+                                                   (get-velocity (place-time-latitude (first (person-data (get-person alop aName))))
+                                                                 (place-time-longitude (first (person-data (get-person alop aName))))
+                                                                 aLat
+                                                                 aLng     
+                                                                 (- curTime
+                                                                    (place-time-time (first (person-data (get-person alop aName)))))) curTime)
+                                  (person-data (get-person alop aName))))
+               (remove-person alop aName)))]
+    [else (cons (make-person aName (list (make-place-time aLat
+                                                          aLng
+                                                          (make-velocity 0 -1)
+                                                          curTime)))
+                alop)]))
+
+;;;; RESPONSE FUNCTIONS -- THIS IS CURRENTLY VERY UGLY AND WILL NEED TO BE CLEANED UP -- SHOULD I DO THIS OR SHOULD I WAIT TILL DANNY IS FINISHED WITH HIS GOOGLE MAPS IMPLEMENTATION IN SCHEME?
 
 ;; The response to someone sending their data
 (define (make-response w req)
@@ -159,37 +241,23 @@
           (xmlns:v "urn:schemas-microsoft-com:vml"))
          (head (meta ((http-equiv "content-type")
                       (content "text/html; charset=utf-8")))
-               (title "Google Maps-Scheme Mashup")
+               (title ,(string-append "Google Maps-Scheme Mashup -- " (number->string (world-absolute-time w)) " seconds"))
+               
                (script ((src "http://maps.google.com/maps?file=api&amp;v=2&amp;sensor=false&amp;key=ABQIAAAA5M6PzUJFRJPgy3QvsbR7hxQw4RzD19GyORoXCg-d1S3AgrtlrBR_aFXmP8VRkolg6qIvOT68quvYLQ")) "")
                (script ((type "text/javascript"))
-                       "
+                       ,(string-append "
     function initialize() {
       if (GBrowserIsCompatible()) {
         var map = new GMap2(document.getElementById(\"map_canvas\"));
-        map.setCenter(new GLatLng(42.37, -71.05), 13);
-        map.addControl(new GSmallMapControl());
-        // Add 10 markers to the map at random locations
-        var bounds = map.getBounds();
-        var southWest = bounds.getSouthWest();
-        var northEast = bounds.getNorthEast();
-        var lngSpan = northEast.lng() - southWest.lng();
-        var latSpan = northEast.lat() - southWest.lat();
-        var point = new GLatLng(southWest.lat() + latSpan * Math.random(),
-                                southWest.lng() + lngSpan * Math.random());
-        var aMarker = new GMarker(point);
-        GEvent.addListener( aMarker, \"click\", function() {
-          aMarker.openInfoWindow(document.createTextNode(\"A worked!!!\"));
-        });
-        map.addOverlay(aMarker);
-        var pointB = new GLatLng(southWest.lat() + latSpan * Math.random(),
-                                 southWest.lng() + lngSpan * Math.random());
-        var aMarkerB = new GMarker(pointB);
-        GEvent.addListener( aMarkerB, \"click\", function() {
-          aMarkerB.openInfoWindow(document.createTextNode(\"Part B worked!!!\"));
-        });
-        map.addOverlay(aMarkerB);
+        map.setCenter(new GLatLng(42.37, -71.05), 8);
+        map.addControl(new GLargeMapControl());
+        "
+                                       (makeAllPlaceMarkers "map" (world-places w))
+                                       
+                                       "
       }
     }"
+                                       )
                        )
                )
          (body ((onload "initialize()") (onunload "GUnload()") (style "font-family: Arial;border: 0 none;"))
@@ -197,30 +265,69 @@
                )
          )
   )
-  
-  
-  
-  
-  #;  `(html ,(cons 'body
-                  (foldl (lambda (nextItem already)
-                           (append (foldr (lambda (nI al)
-                                            (append al (list `(p ,(string-append "Time: " (number->string (place-time-time nI))) ,"\t\t" ,(string-append "Lat: " (number->string (exact->inexact(place-time-latitude nI)))) ,"\t\t" ,(string-append "Lon: " (number->string (exact->inexact(place-time-longitude nI)))) ,"\t\t" ,(velocity->string (place-time-vel nI))))))
-                                          (list `(p ,(string-append "Name: " (person-name nextItem))))
-                                          (person-data nextItem)) already))
-                         (list)
-                         (world-people w))))
 
-;; EXAMPLE:
-#; `(html (body (p "Hello world")
-                (p "This should be another paragraph"
-                   "Hello")))
+;; Temp marker make -- each call to this must have a different markerName
+(define (temp-make-marker mapName markerName latlng infoText)
+  (string-append
+   "infoWindowOptions"
+   markerName
+   " = { maxWidth: 200};
+        var point"
+   markerName
+   " = new GLatLng("
+   (number->string (exact->inexact (posn-x latlng)))
+   ","
+   (number->string (exact->inexact (posn-y latlng)))
+   ");
+        var aMarker"
+   markerName
+   " = new GMarker( point"
+   markerName
+   ");
+        GEvent.addListener( aMarker"
+   markerName
+   ", \"click\", function() {
+          aMarker"
+   markerName
+   ".openInfoWindow(document.createTextNode(\"---"
+   markerName
+   "---"
+   infoText
+   "\"), infoWindowOptions"
+   markerName
+   ");
+        });
+        map.addOverlay(aMarker"
+   markerName
+   ");
+"))
 
+;; Make a series of markers from a series of places
+(define (makeAllPlaceMarkers mapName alops)
+  (cond
+    [(empty? alops) ""]
+    [else (string-append (temp-make-marker mapName
+                                           (place->string (first alops))
+                                           (make-posn (place-latitude(first alops))
+                                                      (place-longitude (first alops)))
+                                           (if (empty? (place-infos (first alops)))
+                                               ""
+                                               (string-append "Time: "
+                                                              (makeNumPrintable (statusInfo-time (first (place-infos (first alops)))) 0)
+                                                              (foldr (lambda (x al)
+                                                                       (string-append al
+                                                                                      (infos->string x)))
+                                                                     ""
+                                                                     (statusInfo-dir-speeds (first (place-infos (first alops))))  ;; this if statement is a bit of a kludge -- try to make it prettier
+                                                                     ))))
+                         (makeAllPlaceMarkers mapName (rest alops)))]))
 
-;(define (constuct-marker  
+(define (infos->string aInfo)
+  (string-append "Bearing: " (makeNumPrintable (dir-speed-center-bearing aInfo) -3)
+                 ", Number of People: " (number->string (dir-speed-numPeople aInfo))
+                 ", Average Speed: " (makeNumPrintable (dir-speed-avgSpeed aInfo) 0)))
 
-;; Update all info (updating the peoples info will be done before everything else)
-
-
+;;;; ALL HELPER FUNCTIONS
 
 ;;;; PEOPLE LISTS
 
@@ -244,6 +351,13 @@
     [(equal? (person-name (first alop)) aName) (first alop)]
     [else (get-person (rest alop) aName)]))
 
+;; Returns true iff alop contains a place with lat and lng within the radius of the place
+(define (contains-location? alop lat lng)
+  (cond
+    [(empty? alop) false]
+    [(contains? (first alop) lat lng) true]
+    [else (contains-location? (rest alop) lat lng)]))
+
 
 
 ;;;; VELOCITY RELATED FUNCTIONS
@@ -255,7 +369,7 @@
 ;; distance: num num num num -> number
 ;; Given two places on a globe, return the shortest distance between them in meters (uses spherical geometry)
 (define (distance latA lonA latB lonB)
-  (* 6378000 
+  (* 6378000
      (* 2
         (asin (min 1
                    (sqrt (+ (expt (sin (/ (- (deg->rad latA) (deg->rad latB)) 2)) 2)
@@ -268,20 +382,18 @@
 (define (direction latA lonA latB lonB)
   (cond 
     [(= (cos (deg->rad latA)) 0) (if (latA > 0) pi (* 2 pi))]
-    [else (mod (+ pi (atan (* (sin (- (deg->rad lonB) (deg->rad lonA))) (cos (deg->rad latB))) (- (* (cos (deg->rad latA)) (sin (deg->rad latB))) (* (sin (deg->rad latA)) (cos (deg->rad latB)) (cos (- (deg->rad lonB) (deg->rad lonA))))))) (* 2 pi))]))
-
-;; mile->meter: number -> number
-;; Converts miles to meters.
-(define (mile->meter miles)
-  (* miles 1609.344))
-
-;; deg->rad: number -> number
-(define (deg->rad aDeg)
-  (/ (* aDeg 2 pi) 360))
-
-;; Turns a velocity into a meaningful string
-(define (velocity->string aVel)
-  (string-append "Speed: " (number->string (velocity-speed aVel)) ", Dir: " (number->string (velocity-dir aVel))))
+    [(and (= latA latB) (= lonA lonB)) -1]
+    [else (mod (+ pi
+                  (atan (* (sin (- (deg->rad lonB)
+                                   (deg->rad lonA)))
+                           (cos (deg->rad latB)))
+                        (- (* (cos (deg->rad latA))
+                              (sin (deg->rad latB)))
+                           (* (sin (deg->rad latA))
+                              (cos (deg->rad latB))
+                              (cos (- (deg->rad lonB)
+                                      (deg->rad lonA)))))))
+               (* 2 pi))]))
 
 
 ;;;; PLACE HELPER FUNCTIONS
@@ -300,11 +412,11 @@
     [(named-place? a-place)
      (named-place-name a-place)]
     [(unnamed-place? a-place)
-     (string-append "Unknown (" 
-                    (number->string (unnamed-place-latitude a-place))
-                    ", "
-                    (number->string (unnamed-place-longitude a-place))
-                    ")")]))
+     (string-append "Unknown_"
+                    (makeNumPrintable (unnamed-place-latitude a-place) -6)
+                    "_"
+                    (makeNumPrintable (unnamed-place-longitude a-place) -6)
+                    "_")]))
 
 ;; place-radius: place -> number
 ;; Given a place, returns its radius.
@@ -313,9 +425,9 @@
     [(named-place? a-place)
      (named-place-radius a-place)]
     [(unnamed-place? a-place)
-     (mile->meter 0.5)]))
+     UNNAMED_PLACE_RADIUS]))
 
-
+1
 ;; place-latitude: place -> number
 (define (place-latitude a-place)
   (cond
@@ -341,6 +453,12 @@
                 (place-longitude a-place))
       (place-radius a-place)))
 
+;; determines if the given place contains the given lat and lng
+(define (contains? aPlace aLat aLng)
+  (>= (place-radius aPlace) (distance aLat
+                                      aLng
+                                      (place-latitude aPlace)
+                                      (place-longitude aPlace))))
 
 ;;;; OTHER HELPER FUNCTIONS
 
@@ -352,8 +470,45 @@
     [(< a b) a]
     [else (mod (- a b) b)]))
 
+;; Determines if the string is made of only a-z, A-Z, and 0-9
+(define (alphabet-and-number? aString)
+  (cond
+    [(= (string-length aString) 0) true]
+    [(not (or (char-alphabetic? (string-ref aString 0)) (char-numeric? (string-ref aString 0)))) false]
+    [else (alphabet-and-number? (substring aString 1))]))
+
+;; mile->meter: number -> number
+;; Converts miles to meters.
+(define (mile->meter miles)
+  (* miles 1609.344))
+
+;; deg->rad: number -> number
+(define (deg->rad aDeg)
+  (/ (* aDeg 2 pi) 360))
+
+;; Turns a velocity into a meaningful string
+(define (velocity->string aVel)
+  (string-append "Speed: " (number->string (velocity-speed aVel)) ", Dir: " (number->string (velocity-dir aVel))))
+
+;; for place-num = 0 will round to the nearest integer, for place-num = 1 will round to the nearest 10 (works for negative integers
+(define (roundToPlace aNum placeNum)
+  (cond
+    [(= 0 placeNum) (round aNum)]
+    [(< 0 placeNum) (* 10.0 (roundToPlace (/ aNum 10.0) (sub1 placeNum)))]
+    [(> 0 placeNum) (/ (roundToPlace (* aNum 10.0) (add1 placeNum)) 10.0)]))
+
+;; replaces the given substring with the replacement wherever the substring appears in aString
+(define (replace-substring aString aSubString replacement)
+  (cond
+    [(equal? (string-length aString) 0) ""]
+    [(equal? aSubString (substring aString 0 (string-length aSubString))) (string-append replacement (replace-substring (substring aString (string-length aSubString)) aSubString replacement))]
+    [else (string-append (substring aString 0 1) (replace-substring (substring aString 1) aSubString replacement))]))
+
+;; Makes a num printable in javascript
+(define (makeNumPrintable aNum decPlacesToRound)
+  (string-append (if (negative? aNum) "neg" "") (replace-substring (number->string (exact->inexact (roundToPlace (abs aNum) decPlacesToRound))) "." "D")))
 
 ;;;; BIG-BANG ETC
 
-(big-bang initWorld ;;(on-tick TICK_TIME update-all)
-          (on-http update-person make-response)) ;; on-tick still needs to be written in
+(big-bang initWorld (on-tick TICK_TIME tock)
+          (on-http add-person make-response)) ;; on-tick still needs to be written in
