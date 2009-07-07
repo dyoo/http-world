@@ -167,19 +167,20 @@
 ;; adds the first place-time data from the given person to the given list of places and returns the list of places
 (define (addPersonToInfos aPerson curTime aloSI)
   (cond
-    [(empty? aloSI) empty]
-    [(= (place-time-time (first (person-data aPerson)))
-        (statusInfo-time (first aloSI)))
+    [(or (empty? aloSI) ;; if empty or without an up-to-date SI, cons (new first) aloSI
+         (not (= (place-time-time (first (person-data aPerson)))
+                 (statusInfo-time (first aloSI)))))
+     (cons (make-statusInfo (list (make-dir-speed (velocity-dir (place-time-vel (first (person-data aPerson))))
+                                                  1
+                                                  (velocity-speed (place-time-vel (first (person-data aPerson))))))
+                            0
+                            curTime)
+           aloSI)]
+    [else ;; if the person's first place-time has the same time as the first statusinfo, add it there (keeping in mind direction etc)
      (cons (make-statusInfo (addDataToDS (place-time-vel (first (person-data aPerson))) (statusInfo-dir-speeds (first aloSI)) false)
                             (statusInfo-trafficLevel (first aloSI))
                             (statusInfo-time (first aloSI)))
-           (rest aloSI))] ;; if the person's first place-time has the same time as the first statusinfo, add it there (keeping in mind direction etc)
-    [else (cons (make-statusInfo (list (make-dir-speed (velocity-dir (place-time-vel (first (person-data aPerson))))
-                                                       1
-                                                       (velocity-speed (place-time-vel (first (person-data aPerson))))))
-                                 0
-                                 curTime)
-                aloSI)]))    ;; else, cons (new first) aloSI
+           (rest aloSI))])) 
 
 ;; Adds the velocity data from aVel to the list of dir-speed (aloDS), adding a new dir-speed if necessary
 (define (addDataToDS aVel aloDS entered)
@@ -526,7 +527,7 @@
 
 ;; Turns a velocity into a meaningful string
 (define (velocity->string aVel)
-  (string-append "Speed: " (number->string (velocity-speed aVel)) ", Dir: " (number->string (velocity-dir aVel))))
+  (string-append "Speed: " (makeNumPrintable (velocity-speed aVel) -3) ", Dir: " (makeNumPrintable (velocity-dir aVel) -3)))
 
 ;; for place-num = 0 will round to the nearest integer, for place-num = 1 will round to the nearest 10 (works for negative integers
 (define (roundToPlace aNum placeNum)
