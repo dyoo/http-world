@@ -66,9 +66,9 @@
 ;;;; ON TICK
 ;;;; Removes all expired data
 (define (tock w)
-;  (if (< (mod (world-absolute-time w) UPDATE_TIME) TICK_TIME)
- ;     (make-world (cleanPlaces (world-places w) (- (world-absolute-time w) PLACE_TIMEOUT)) (cleanPeople (world-people w) (- (world-absolute-time w) PERSON_TIMEOUT)) (+ TICK_TIME (world-absolute-time w)))
-      (make-world (world-places w) (world-people w) (+ (world-absolute-time w) TICK_TIME)));)
+    (if (< (mod (world-absolute-time w) UPDATE_TIME) TICK_TIME)
+       (make-world (cleanPlaces (world-places w) (- (world-absolute-time w) PLACE_TIMEOUT)) (cleanPeople (world-people w) (- (world-absolute-time w) PERSON_TIMEOUT)) (+ TICK_TIME (world-absolute-time w)))
+  (make-world (world-places w) (world-people w) (+ (world-absolute-time w) TICK_TIME))))
 
 ;;;; Removing old place data
 
@@ -260,9 +260,47 @@
                                        )
                        )
                )
-         (body ((onload "initialize()") (onunload "GUnload()") (style "font-family: Arial;border: 0 none;"))
-               (div ((id "map_canvas") (style "width: 480px; height: 320px")) "")
-               )
+         ,(append (list 'body 
+                        `((onload "initialize()") (onunload "GUnload()") (style "font-family: Arial;border: 0 none;"))
+                        `(div ((id "map_canvas") (style "width: 480px; height: 320px")) "")
+                        `(h1 "People:"))
+                  (foldl (lambda (nextItem already)
+                           (append (foldr (lambda (nI al)
+                                            (append al
+                                                    (list `(p ,(string-append "Time: "
+                                                                              (number->string (place-time-time nI))
+                                                                              ", Lat: "
+                                                                              (number->string (exact->inexact (place-time-latitude nI)))
+                                                                              ", Lon: "
+                                                                              (number->string (exact->inexact (place-time-longitude nI))) 
+                                                                              ", "
+                                                                              (velocity->string (place-time-vel nI)))))))
+                                          (list `(h2 ,(string-append "Name: " (person-name nextItem))))
+                                          (person-data nextItem)) already))
+                         empty
+                         (world-people w))
+                  (list `(h1 "Places:"))
+                  (foldl (lambda (nextPlace already)
+                           (append (foldr (lambda (nI al)
+                                            (append al
+                                                    (list `(p ,(string-append "Bearing: "
+                                                                              (makeNumPrintable (dir-speed-center-bearing nI) -6)
+                                                                              ", # Of People: "
+                                                                              (makeNumPrintable (dir-speed-numPeople nI) 0)
+                                                                              ", avgSpeed: "
+                                                                              (makeNumPrintable (dir-speed-avgSpeed nI) -6))))))
+                                          (if (empty? (place-infos nextPlace))
+                                              (list `(h2 ,(string-append (place->string nextPlace)))
+                                                    `(p "Empty..."))
+                                              (list `(h2 ,(string-append (place->string nextPlace)
+                                                                         ", Time:"
+                                                                         (number->string (statusInfo-time (first (place-infos nextPlace))))))))
+                                          (if (empty? (place-infos nextPlace))
+                                              empty 
+                                              (statusInfo-dir-speeds (first (place-infos nextPlace))))) already))
+                         empty
+                         (world-places w))
+                  )
          )
   )
 
@@ -408,15 +446,15 @@
 
 ;; place->string: place -> string
 (define (place->string a-place)
-  (cond
-    [(named-place? a-place)
-     (named-place-name a-place)]
-    [(unnamed-place? a-place)
-     (string-append "Unknown_"
-                    (makeNumPrintable (unnamed-place-latitude a-place) -6)
-                    "_"
-                    (makeNumPrintable (unnamed-place-longitude a-place) -6)
-                    "_")]))
+  (string-append (cond
+                   [(named-place? a-place)
+                    (string-append (named-place-name a-place) "_")]
+                   [(unnamed-place? a-place)
+                    "Unknown_"])
+                 (makeNumPrintable (place-latitude a-place) -6)
+                 "_"
+                 (makeNumPrintable (place-longitude a-place) -6)
+                 "_"))
 
 ;; place-radius: place -> number
 ;; Given a place, returns its radius.
