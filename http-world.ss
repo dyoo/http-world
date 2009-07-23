@@ -5,6 +5,7 @@
          scheme/list
          scheme/match
          scheme/string
+         (only-in xml make-cdata)
          lang/prim)
 
 ;; A prototype http-world.
@@ -153,7 +154,12 @@
     [else
      html]))
 
-    
+
+(define (wrap-with-cdata content)
+  (make-cdata
+   (string-append "<![CDATA[" content "]]>")))
+
+
 
 ;; css->style-source: css -> string
 (define (css->style-source a-css) 
@@ -165,6 +171,16 @@
     [(list)
      ""]))
  
+
+;; stringify: X -> string
+(define (stringify val)
+  (format "~a" val))
+
+
+;; id->class-selector: (or symbol string) -> string
+(define (id->class-selector an-id)
+  (format "#~a" an-id))
+
 
 ;; css-clause->string: id (listof string) (listof (listof string))) -> string
 (define (css-clause->string id names valss)
@@ -178,15 +194,13 @@
               (cons (string-append
                      (format "~a" (first names))
                      " : "
-                     (string-join (map (lambda (v) (format "~s" v)) (first valss)) " "))
+                     (string-join (map (lambda (v) (format "~s" (stringify v))) (first valss)) " "))
                     (loop (rest names) (rest valss)))]))])
-    (string-append id " { " (string-join key-value-pairs "; ") " } ")))
-
+    (string-append (id->class-selector id)
+                   " { "
+                   (string-join key-value-pairs "; ") 
+                   " } ")))
       
-      
-     
-  
-
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
