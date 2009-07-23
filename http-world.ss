@@ -155,9 +155,9 @@
      html]))
 
 
+;; Hacky.  Should we worry about injection attacks?
 (define (wrap-with-cdata content)
-  (make-cdata #f #f (string-append "\n<![CDATA[\n" content "\n]]>\n")))
-
+  (make-cdata #f #f content))
 
 
 ;; css->style-source: css -> string
