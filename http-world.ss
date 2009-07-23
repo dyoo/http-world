@@ -141,13 +141,13 @@
            rest ...)
 
      `(html (head ,@head-content
-                  (style ,style-source))
+                  (style ,(wrap-with-cdata style-source)))
             ,@rest)]
     
     [(list 'html 
            (list 'body body-content ...)
            rest ...)
-     `(html (head (style ,style-source))
+     `(html (head (style ,(wrap-with-cdata style-source)))
             (body ,@body-content)
             ,@rest)]
 
@@ -156,8 +156,7 @@
 
 
 (define (wrap-with-cdata content)
-  (make-cdata
-   (string-append "<![CDATA[" content "]]>")))
+  (make-cdata #f #f (string-append "\n<![CDATA[\n" content "\n]]>\n")))
 
 
 
