@@ -4,6 +4,7 @@
          scheme/local
          scheme/list
          scheme/match
+         scheme/string
          lang/prim)
 
 ;; A prototype http-world.
@@ -126,6 +127,41 @@
       ;; FIXME: do something with the CSS
       html)))
 
+
+;; css->style-block: css -> string
+(define (css->style-block a-css) 
+  (match a-css
+    [(list (list id (list (list names valss ...) ...))
+           rest-css ...)
+     (string-append (css-clause->string id names valss)
+                    (css->style-block rest-css))
+    [(list)
+     ""]]))
+ 
+
+;; css-clause->string: id (listof string) (listof (listof string))) -> string
+(define (css-clause->string id names valss)
+  (let ([key-value-pairs
+         (let loop ([names names]
+                    [valss valss])
+           (cond
+             [(empty? names)
+              empty]
+             [else
+              (cons (string-append
+                     (format "~a" (first names))
+                     " : "
+                     (string-join (map (lambda (v) (format "~s" v)) (first valss)) " "))
+                    (loop (rest names) (rest valss)))]))])
+    (string-append id " { " (string-join key-value-pairs "; ") " } ")))
+
+      
+      
+     
+  
+
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
@@ -148,26 +184,37 @@
 
 ;; Another one that lets us try the css model.
 (define (simple-test-2)
-  (local [(define-struct world (hits seconds))]
-    (big-bang (make-world 0 0) 
-              
-              (on-tick 1 (lambda (w) (make-world (world-hits w)
-                                                 (add1 (world-seconds w)))))
-              
-              (on-http (lambda (w req) (make-world (add1 (world-hits w))
-                                                   (world-seconds w)))
-                       (lambda (w req) 
-                         `(html (head)
-                                (title "Hello World!")
-                                (body (h1 "Hello World!")
-                                      (p ((id "aPara"))
-                                         "Hello world, I've seen "
-                                         ,(number->string (world-hits w))
-                                         ".  "
-                                         ,(number->string (world-seconds w))
-                                         " seconds have passed since startup."))))
-                       (lambda (w req)
-                         `(("aPara" ("font-size" "30px"))))))))
+  (local [(define-struct world (hits seconds))
+
+          ;; tick: world -> world
+          (define (tick w)
+            (make-world (world-hits w)
+                        (add1 (world-seconds w))))
+
+          ;; update-on-request: world request -> world
+          (define (update-on-request w req)
+            (make-world (add1 (world-hits w))
+                        (world-seconds w)))
+          
+          ;; draw-html: world request -> html
+          (define (draw-html w req)
+            `(html (head)
+                   (title "Hello World!")
+                   (body (h1 "Hello World!")
+                         (p ((id "aPara"))
+                            "Hello world, I've seen "
+                            ,(number->string (world-hits w))
+                            ".  "
+                            ,(number->string (world-seconds w))
+                            " seconds have passed since startup."))))
+
+          ;; draw-css: world request -> css
+          (define (draw-css w req)
+            `(("aPara" ("font-size" "30px"))))]
+
+    (big-bang (make-world 0 0)               
+              (on-tick 1 tick)
+              (on-http update-on-request draw-html draw-css))))
   
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
