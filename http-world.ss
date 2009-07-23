@@ -53,7 +53,7 @@
       (error 'on-http/raw "Cannot define both an on-http/raw and on-http in a single big bang"))
     (cons (make-handler:request->raw world-update response-f)
           config)))
-          
+
 
 ;; on-http: world (world request -> world) (world request -> html) (world request -> css) -> handler
 (define (on-http world-update html-response-f css-response-f)
@@ -63,7 +63,7 @@
     (cons (make-handler:request->html+css world-update html-response-f css-response-f)
           config)))
 
-  
+
 ;; on-tick: number (world -> world) -> handler
 (define (on-tick delay world-update)
   (lambda (config)
@@ -82,38 +82,44 @@
                                          handlers))
           
           (define world initial-world)
-
-          ;; FIXME: use a channel to enforce the critical region.
-
+                
+          ;; Enforce the critical region.
+          (define in-critical-region
+            (let ([a-sema (make-semaphore 1)])
+              (lambda (thunk)
+                (call-with-semaphore a-sema thunk))))
+                                
+          
           ;; run-servlet: (world request -> world) (world request -> response) -> void
           (define (run-servlet world-update response-generator)
             (define (handler request)
-              (local [(define new-world (world-update world request))
-                      (define a-response (response-generator world request))]
-                (set! world new-world)
-                a-response))
-            (serve/servlet handler))
-
-
+              (in-critical-region (lambda ()
+                                    (local [(define new-world (world-update world request))
+                                            (define a-response (response-generator world request))]
+                                      (set! world new-world)
+                                      a-response))))
+            (thread (lambda ()
+                      (serve/servlet handler))))
+          
+          
           ;; handler-start!: handler -> void
           (define (handler-start! a-handler)
             (match a-handler
               [(struct handler:request->raw (world-update-f response-f))
-                 (thread (lambda ()
-                           (run-servlet world-update-f response-f)))]
-
+               (run-servlet world-update-f response-f)]
+              
               [(struct handler:request->html+css (world-update-f html-response-f css-response-f))
-               (thread (lambda ()
-                         (run-servlet world-update-f 
-                                      (html+css-generators->response-generator html-response-f
-                                                                               css-response-f))))]
-
+               (run-servlet world-update-f 
+                            (html+css-generators->response-generator html-response-f
+                                                                     css-response-f))]
+              
               [(struct handler:tick (delay world-update-f))
                (thread (lambda ()
                          (let loop ()
                            (sleep delay)
-                           (local [(define new-world (world-update-f world))]
-                             (set! world new-world))
+                           (in-critical-region (lambda ()
+                                                 (local [(define new-world (world-update-f world))]
+                                                   (set! world new-world))))
                            (loop))))]))]
     (for-each handler-start! config-elements)))
 
@@ -125,7 +131,6 @@
     (let ([html (html-generator world request)]
           [style-source (css->style-source (css-generator world request))])
       
-      ;; FIXME: do something with the CSS
       (inject-style-source html style-source))))
 
 
@@ -139,24 +144,24 @@
     [(list 'html 
            (list 'head head-content ...)
            rest ...)
-
+     
      `(html (head ,@head-content
-                  (style ,(wrap-with-cdata style-source)))
+                  (style ,(leave-unescaped style-source)))
             ,@rest)]
     
     [(list 'html 
            (list 'body body-content ...)
            rest ...)
-     `(html (head (style ,(wrap-with-cdata style-source)))
+     `(html (head (style ,(leave-unescaped style-source)))
             (body ,@body-content)
             ,@rest)]
-
+    
     [else
      html]))
 
 
 ;; Hacky.  Should we worry about injection attacks?
-(define (wrap-with-cdata content)
+(define (leave-unescaped content)
   (make-cdata #f #f content))
 
 
@@ -169,7 +174,7 @@
                     (css->style-source rest-css))]
     [(list)
      ""]))
- 
+
 
 ;; stringify: X -> string
 (define (stringify val)
@@ -199,7 +204,7 @@
                    " { "
                    (string-join key-value-pairs "; ") 
                    " } ")))
-      
+
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -225,12 +230,12 @@
 ;; Another one that lets us try the css model.
 (define (simple-test-2)
   (local [(define-struct world (hits seconds))
-
+          
           ;; tick: world -> world
           (define (tick w)
             (make-world (world-hits w)
                         (add1 (world-seconds w))))
-
+          
           ;; update-on-request: world request -> world
           (define (update-on-request w req)
             (make-world (add1 (world-hits w))
@@ -247,15 +252,15 @@
                             ".  "
                             ,(number->string (world-seconds w))
                             " seconds have passed since startup."))))
-
+          
           ;; draw-css: world request -> css
           (define (draw-css w req)
             `(("aPara" ("font-size" "30px"))))]
-
+    
     (big-bang (make-world 0 0)               
               (on-tick 1 tick)
               (on-http update-on-request draw-html draw-css))))
-  
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
