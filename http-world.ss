@@ -41,11 +41,14 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+;; A handler is something that takes a configuration and produces a new configuration.
 
 
 ;; on-http/raw: (world request -> world) (world request -> response) -> handler
 (define (on-http/raw world-update response-f)
   (lambda (config)
+    (when (findf handler:request->html+css? config)
+      (error 'on-http/raw "Cannot define both an on-http/raw and on-http in a single big bang"))
     (cons (make-handler:request->raw world-update response-f)
           config)))
           
@@ -53,6 +56,8 @@
 ;; on-http: world (world request -> world) (world request -> html) (world request -> css) -> handler
 (define (on-http world-update html-response-f css-response-f)
   (lambda (config)
+    (when (findf handler:request->raw? config)
+      (error 'on-http/raw "Cannot define both an on-http/raw and on-http in a single big bang"))
     (cons (make-handler:request->html+css world-update html-response-f css-response-f)
           config)))
 
@@ -78,22 +83,29 @@
           (define world initial-world)
 
           ;; FIXME: use a channel to enforce the critical region.
-          
+
+          ;; run-servlet: (world request -> world) (world request -> response) -> void
+          (define (run-servlet world-update response-generator)
+            (define (handler request)
+              (local [(define new-world (world-update world request))
+                      (define a-response (response-generator world request))]
+                (set! world new-world)
+                a-response))
+            (serve/servlet handler))
+
+
+          ;; handler-start!: handler -> void
           (define (handler-start! a-handler)
             (match a-handler
               [(struct handler:request->raw (world-update-f response-f))
                  (thread (lambda ()
-                           (define (handler request)
-                             (local [(define new-world (world-update-f world request))
-                                     (define a-response (response-f world request))]
-                               (set! world new-world)
-                               a-response))
-                           (serve/servlet handler)))]
+                           (run-servlet world-update-f response-f)))]
 
-              [(struct handler:request->html+css (world-update-f http-response-f css-response-f))
-               (void)
-               ;; fixme
-               ]
+              [(struct handler:request->html+css (world-update-f html-response-f css-response-f))
+               (thread (lambda ()
+                         (run-servlet world-update-f 
+                                      (html+css-generators->response-generator html-response-f
+                                                                               css-response-f))))]
 
               [(struct handler:tick (delay world-update-f))
                (thread (lambda ()
@@ -105,11 +117,20 @@
     (for-each handler-start! config-elements)))
 
 
+;; html+css-generators->response-generator: (world request -> html) (world request -> css-sexpr) -> (world request -> response)
+;; Translate the pair of response functions into a single one.
+(define (html+css-generators->response-generator html-generator css-generator)
+  (lambda (world request)
+    (let ([html (html-generator world request)]
+          [css (css-generator world request)])
+      ;; FIXME: do something with the CSS
+      html)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
 ;; A small function to exercise the framework.
-(define (simple-test)
+(define (simple-test-1)
   (local [(define-struct world (hits seconds))]
     (big-bang (make-world 0 0) 
               
@@ -124,6 +145,30 @@
                                             ".  "
                                             (number->string (world-seconds w))
                                             " seconds have passed since startup."))))))
+
+;; Another one that lets us try the css model.
+(define (simple-test-2)
+  (local [(define-struct world (hits seconds))]
+    (big-bang (make-world 0 0) 
+              
+              (on-tick 1 (lambda (w) (make-world (world-hits w)
+                                                 (add1 (world-seconds w)))))
+              
+              (on-http (lambda (w req) (make-world (add1 (world-hits w))
+                                                   (world-seconds w)))
+                       (lambda (w req) 
+                         `(html (head)
+                                (title "Hello World!")
+                                (body (h1 "Hello World!")
+                                      (p ((id "aPara"))
+                                         "Hello world, I've seen "
+                                         ,(number->string (world-hits w))
+                                         ".  "
+                                         ,(number->string (world-seconds w))
+                                         " seconds have passed since startup."))))
+                       (lambda (w req)
+                         `(("aPara" ("font-size" "30px"))))))))
+  
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
