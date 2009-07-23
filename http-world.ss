@@ -70,7 +70,6 @@
           config)))
 
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
@@ -123,20 +122,48 @@
 (define (html+css-generators->response-generator html-generator css-generator)
   (lambda (world request)
     (let ([html (html-generator world request)]
-          [css (css-generator world request)])
+          [style-source (css->style-source (css-generator world request))])
+      
       ;; FIXME: do something with the CSS
-      html)))
+      (inject-style-source html style-source))))
 
 
-;; css->style-block: css -> string
-(define (css->style-block a-css) 
+;; inject-style-source: html string -> html
+;; Adds an additional style into the head of the given html.
+;;
+;; FIXME: inject as CDATA to avoid escaping issues!
+;;
+(define (inject-style-source html style-source)
+  (match html
+    [(list 'html 
+           (list 'head head-content ...)
+           rest ...)
+
+     `(html (head ,@head-content
+                  (style ,style-source))
+            ,@rest)]
+    
+    [(list 'html 
+           (list 'body body-content ...)
+           rest ...)
+     `(html (head (style ,style-source))
+            (body ,@body-content)
+            ,@rest)]
+
+    [else
+     html]))
+
+    
+
+;; css->style-source: css -> string
+(define (css->style-source a-css) 
   (match a-css
-    [(list (list id (list (list names valss ...) ...))
+    [(list (list id (list names valss ...) ...)
            rest-css ...)
      (string-append (css-clause->string id names valss)
-                    (css->style-block rest-css))
+                    (css->style-source rest-css))]
     [(list)
-     ""]]))
+     ""]))
  
 
 ;; css-clause->string: id (listof string) (listof (listof string))) -> string
